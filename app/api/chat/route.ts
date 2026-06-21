@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
       }),
     });
 
-    if (!res.ok) {
+    if (!res.ok) {   
       const text = await res.text();
       return NextResponse.json(
         { error: text },

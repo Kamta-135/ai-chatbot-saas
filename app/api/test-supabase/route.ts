@@ -37,8 +37,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Demo embedding: abhi dummy vector (sab 0) daal rahe hain
-    // Later yahi pe actual LLM embedding aayega
     const embeddingSize = 1536;
     const dummyEmbedding = Array(embeddingSize).fill(0);
 
