@@ -1,69 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseServerClient } from "@/lib/supabase-server";
+import { createClient } from "@supabase/supabase-js";
+import { embedText } from "@/lib/embeddings";
 
-export async function GET() {
-  try {
-    const { count, error } = await supabaseServerClient
-      .from("documents")
-      .select("*", { count: "exact", head: true });
-
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      documentsCount: count ?? 0,
-    });
-  } catch (err: any) {
-    return NextResponse.json(
-      { ok: false, error: err.message || "Unknown error" },
-      { status: 500 }
-    );
-  }
-}
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export async function POST(req: NextRequest) {
   try {
-    const { content, title } = await req.json();
+    const formData = await req.formData();
+    const file = formData.get("file") as File | null;
 
-    if (!content) {
+    if (!file) {
       return NextResponse.json(
-        { ok: false, error: "content is required" },
+        { error: "file is required" },
         { status: 400 }
       );
     }
 
-    const embeddingSize = 1536;
-    const dummyEmbedding = Array(embeddingSize).fill(0);
+    const text = await file.text();
 
-    const { data, error } = await supabaseServerClient
+    const fileName = `${Date.now()}-${file.name}`;
+    const { error: uploadError } = await supabase.storage
       .from("documents")
-      .insert({
-        content,
-        embedding: dummyEmbedding,
-        title: title || "Demo document",
-        source: "manual-test",
-      })
-      .select();
+      .upload(fileName, file);
 
-    if (error) {
+    if (uploadError) {
+      console.error("upload error:", uploadError);
       return NextResponse.json(
-        { ok: false, error: error.message },
+        { error: "upload failed" },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({
-      ok: true,
-      inserted: data,
+    const embedding = await embedText(text);
+
+    const { error: insertError } = await supabase.from("documents").insert({
+      content: text,
+      embedding,
+      metadata: { fileName },
     });
-  } catch (err: any) {
+
+    if (insertError) {
+      console.error("insert error:", insertError);
+      return NextResponse.json(
+        { error: "insert failed" },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json(
-      { ok: false, error: err.message || "Unknown error" },
+      { ok: true, fileName },
+      { status: 200 }
+    );
+  } catch (e) {
+    console.error("upload-document error:", e);
+    return NextResponse.json(
+      { error: "internal server error" },
       { status: 500 }
     );
   }
