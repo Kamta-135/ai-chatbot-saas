@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "google/gemini-2.5-flash",
+                model: "qwen/qwen2.5-vl-32b-instruct:free",
                 max_tokens: 1024,
                 messages: [
                     {

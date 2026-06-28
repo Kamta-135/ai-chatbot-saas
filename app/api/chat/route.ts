@@ -10,7 +10,7 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const DEFAULT_MODEL = "openai/gpt-4.1-mini";
+const DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free";
 
 export async function POST(req: NextRequest) {
     try {
