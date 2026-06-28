@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "google/gemini-2.0-flash-001",
+                model: "google/gemini-2.5-flash",
                 messages: [
                     {
                         role: "user",
