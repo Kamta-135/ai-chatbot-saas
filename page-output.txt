@@ -1,0 +1,235 @@
+﻿"use client";
+
+import React, { useState } from "react";
+
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export default function ChatPage() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState("openai/gpt-4.1-mini");
+
+  // === FILE UPLOAD HANDLER ===
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/upload-document", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Upload failed");
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "Document upload failed. Please try again.",
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `Document "${file.name}" uploaded and added to knowledge base âœ…`,
+          },
+        ]);
+      }
+    } catch {
+      setError("Network error");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Document upload failed. Please try again.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+      e.target.value = ""; // clear file input
+    }
+  }
+
+  // === CHAT SEND HANDLER ===
+  async function sendMessage(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!input.trim()) return;
+
+    const userInput = input.trim();
+    setInput("");
+    setLoading(true);
+
+    setMessages((prev) => [...prev, { role: "user", content: userInput }]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userInput,
+          model,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "LLM request failed");
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "Error talking to AI. Please try again.",
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: data.answer || "No answer from AI.",
+          },
+        ]);
+      }
+    } catch {
+      setError("Network error");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Error talking to AI. Please try again.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="app-root">
+      <div className="bg-orbit orbit-1" />
+      <div className="bg-orbit orbit-2" />
+      <div className="bg-orbit orbit-3" />
+
+      <div className="chat-shell">
+        {/* Header */}
+        <div className="chat-header">
+          <div className="chat-logo">
+            <div className="logo-dot" />
+            <div className="logo-text">AI Chatbot</div>
+          </div>
+          <div className="chat-status">
+            <span className="status-dot" />
+            <span className="status-text">Online Â· RAG powered</span>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="chat-body">
+          {messages.length === 0 && (
+            <div className="chat-empty">
+              <h2>Welcome to your AI workspace</h2>
+              <p>
+                Ask questions about your Supabase docs, product copy, or ideas.
+                Your AI assistant will use RAG to pull relevant context.
+              </p>
+              <ul>
+                <li>â€œSummarize the test document stored in Supabase.â€</li>
+                <li>â€œExplain what RAG is in simple terms.â€</li>
+                <li>â€œHelp me debug a Supabase query error.â€</li>
+              </ul>
+            </div>
+          )}
+
+          <div className="chat-messages">
+            {messages.map((m, i) => (
+              <div
+                key={i}
+                className={`message-row ${m.role === "user" ? "from-user" : "from-ai"
+                  }`}
+              >
+                <div className="message-bubble">
+                  <div className="message-text">{m.content}</div>
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div className="message-row from-ai">
+                <div className="message-bubble">
+                  <div className="typing-dots">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Error */}
+        {error && <div className="chat-error">{error}</div>}
+
+        {/* Footer */}
+        <div className="chat-footer">
+          <form onSubmit={sendMessage}>
+            {/* Document upload */}
+            <div style={{ marginBottom: "8px" }}>
+              <label style={{ fontSize: "0.8rem", marginRight: "8px" }}>
+                Upload document:
+              </label>
+              <input
+                type="file"
+                accept=".txt"
+                onChange={handleFileUpload}
+              />
+            </div>
+
+            {/* Chat input */}
+            <div className="input-wrapper">
+              <input
+                className="chat-input"
+                placeholder="Ask anythingâ€¦"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (input.trim()) {
+                      (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
+                    }
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="send-button"
+                disabled={loading || !input.trim()}
+              >
+                <span className="send-icon">âž¤</span>
+              </button>
+            </div>
+            <div className="chat-hint">
+              Press <kbd>Enter</kbd> to send Â· Powered by Supabase & OpenRouter
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
