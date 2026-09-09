@@ -7,9 +7,10 @@ type AttachMenuProps = {
   onDocumentSelected: (file: File) => void;
   onImageSelected: (file: File) => void;
   onCameraCapture: (file: File) => void;
+  disabled?: boolean;
 };
 
-export function AttachMenu({ onDocumentSelected, onImageSelected, onCameraCapture }: AttachMenuProps) {
+export function AttachMenu({ onDocumentSelected, onImageSelected, onCameraCapture, disabled }: AttachMenuProps) {
   const [open, setOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -23,6 +24,11 @@ export function AttachMenu({ onDocumentSelected, onImageSelected, onCameraCaptur
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Ek request start hote hi menu band kar do agar khula tha
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   return (
     <div style={{ position: "relative" }} ref={menuRef}>
@@ -51,11 +57,14 @@ export function AttachMenu({ onDocumentSelected, onImageSelected, onCameraCaptur
 
       <button
         type="button"
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
+        title={disabled ? "Pichhli request poori hone ka wait karo" : undefined}
         style={{
           width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.1)",
           border: "none", color: "white", display: "flex", alignItems: "center",
-          justifyContent: "center", cursor: "pointer", flexShrink: 0,
+          justifyContent: "center", cursor: disabled ? "not-allowed" : "pointer", flexShrink: 0,
+          opacity: disabled ? 0.4 : 1,
         }}
       >
         <Plus size={18} style={{ transform: open ? "rotate(45deg)" : "none", transition: "transform 0.15s" }} />

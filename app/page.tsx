@@ -6,6 +6,7 @@ import { VoiceInput } from "./components/VoiceInput";
 import { Volume2, VolumeX } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { getSessionId } from "@/lib/client-session";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
@@ -34,10 +35,16 @@ export default function ChatPage() {
   }
 
   async function handleFileUpload(file: File) {
+    // Agar pehle se koi chat/upload/image request chal rahi hai, to naya action shuru mat karo —
+    // warna dono responses jis order mein resolve hon usi (random) order mein screen pe aa jaate hain.
+    if (loading) return;
+
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("sessionId", getSessionId());
     setLoading(true);
     setError(null);
+    setMessages((prev) => [...prev, { role: "user", content: `📄 Sent document: ${file.name}` }]);
 
     try {
       const res = await fetch("/api/chat/upload-document", { method: "POST", body: formData });
@@ -46,8 +53,35 @@ export default function ChatPage() {
       if (!res.ok) {
         setError(data.error ?? "Upload failed");
         setMessages((prev) => [...prev, { role: "assistant", content: data.error || "Document upload failed." }]);
-      } else {
-        setMessages((prev) => [...prev, { role: "assistant", content: `Document "${file.name}" uploaded and added to knowledge base ✅` }]);
+        return;
+      }
+
+      setMessages((prev) => [...prev, { role: "assistant", content: `Document "${file.name}" uploaded and added to knowledge base ✅` }]);
+
+      // Upload ke turant baad khud hi document ko explain karo — user ko alag se
+      // "explain this pdf" type karke bhejne ki zaroorat nahi, seedha yahin reply aa jaayega.
+      try {
+        const chatRes = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: `Maine "${file.name}" naam ka document upload kiya hai. Iska content padh kar mujhe achhe se samjhao ki isme kya hai.`,
+            model,
+            history: messages,
+            sessionId: getSessionId(),
+          }),
+        });
+        const chatData = await chatRes.json();
+
+        if (!chatRes.ok) {
+          setMessages((prev) => [...prev, { role: "assistant", content: chatData.error || "Document explain nahi ho paaya, ek baar 'explain kro' likh kar bhej dena." }]);
+        } else {
+          const answer = chatData.answer || "Document padh liya, lekin explanation generate nahi ho paaya.";
+          setMessages((prev) => [...prev, { role: "assistant", content: answer }]);
+          speak(answer);
+        }
+      } catch {
+        setMessages((prev) => [...prev, { role: "assistant", content: "Document explain nahi ho paaya, ek baar 'explain kro' likh kar bhej dena." }]);
       }
     } catch {
       setError("Network error");
@@ -58,6 +92,8 @@ export default function ChatPage() {
   }
 
   async function handleImageSelected(file: File) {
+    if (loading) return; // ek waqt mein ek hi request — ordering safe rakhne ke liye
+
     setError(null);
     setLoading(true);
     setMessages((prev) => [...prev, { role: "user", content: `📷 Sent image: ${file.name}` }]);
@@ -97,9 +133,13 @@ export default function ChatPage() {
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!input.trim()) return;
+    if (!input.trim() || loading) return; // ek waqt mein ek hi request
 
     const userInput = input.trim();
+    // Pichhli saari baat-cheet (history) ko snapshot kar lo naya message add karne se PEHLE —
+    // isse backend ko pata rahega ki "hn"/"aur batao" jaisa chhota follow-up kis context mein
+    // poocha gaya hai. Pehle ye bheja hi nahi jaata tha, isliye follow-ups kaam nahi karte the.
+    const historyForRequest = messages;
     setInput("");
     setLoading(true);
     setMessages((prev) => [...prev, { role: "user", content: userInput }]);
@@ -108,7 +148,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userInput, model }),
+        body: JSON.stringify({ message: userInput, model, history: historyForRequest, sessionId: getSessionId() }),
       });
 
       const data = await res.json();
@@ -212,20 +252,22 @@ export default function ChatPage() {
           <form onSubmit={sendMessage}>
             <div className="input-wrapper">
               <AttachMenu
+                disabled={loading}
                 onDocumentSelected={handleFileUpload}
                 onImageSelected={handleImageSelected}
                 onCameraCapture={handleImageSelected}
               />
-              <VoiceInput onTranscript={(text) => setInput((prev) => (prev ? prev + " " + text : text))} />
+              <VoiceInput disabled={loading} onTranscript={(text) => setInput((prev) => (prev ? prev + " " + text : text))} />
               <input
                 className="chat-input"
                 placeholder="Ask anything…"
                 value={input}
+                disabled={loading}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    if (input.trim()) (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
+                    if (input.trim() && !loading) (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
                   }
                 }}
               />

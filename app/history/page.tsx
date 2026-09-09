@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getSessionId } from "@/lib/client-session";
 
 type ChatRow = {
     id: number;
@@ -22,7 +23,7 @@ export default function HistoryPage() {
     const [openId, setOpenId] = useState<number | null>(null);
 
     useEffect(() => {
-        fetch("/api/chat/history")
+        fetch(`/api/chat/history?sessionId=${encodeURIComponent(getSessionId())}`)
             .then((res) => res.json())
             .then((data: ChatRow[]) => {
                 const grouped: Pair[] = [];
