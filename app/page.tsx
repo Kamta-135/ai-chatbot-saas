@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useState } from "react";
 import { AttachMenu } from "./components/AttachMenu";
@@ -7,38 +7,132 @@ import { Volume2, VolumeX } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getSessionId } from "@/lib/client-session";
+import { speak as speakText, stopSpeaking, createLiveSpeaker } from "@/lib/speak";
+import { fileToDataUrlResized } from "@/lib/image-utils";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
+
+// Document ki search (Supabase + embedding) tabhi hoti hai jab is browser se kabhi document upload hua ho.
+// Normal sawaalon mein ye 1-3 second bachata hai.
+const DOCS_FLAG = "nexora_has_docs";
+function hasUploadedDocs(): boolean {
+  try {
+    return localStorage.getItem(DOCS_FLAG) === "1";
+  } catch {
+    return false;
+  }
+}
+function markUploadedDocs() {
+  try {
+    localStorage.setItem(DOCS_FLAG, "1");
+  } catch {}
+}
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState("openai/gpt-4.1-mini");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
 
+  // Male Indian voice (Hindi / Indian English) — logic lib/speak.ts mein hai
   function speak(text: string) {
     if (typeof window === "undefined") return;
     if (!voiceEnabled) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "hi-IN";
-    window.speechSynthesis.speak(utterance);
+    speakText(text);
   }
 
   function toggleVoice() {
-    if (typeof window !== "undefined") {
-      window.speechSynthesis.cancel();
-    }
+    stopSpeaking();
     setVoiceEnabled((v) => !v);
+  }
+
+  // Chat model se jawab shabd-shabd (stream) mangta hai, screen par live dikhata hai, aur ant mein bolta hai.
+  // sendMessage aur document upload ke baad auto-explain dono yahi use karte hain.
+  async function streamAssistantReply(message: string, historySnapshot: ChatMessage[], useDocs: boolean = hasUploadedDocs()) {
+    stopSpeaking();
+    // Awaaz jawab ke saath-saath bolti hai (poora jawab banne ka intezaar nahi)
+    const speaker = voiceEnabled ? createLiveSpeaker() : null;
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          model,
+          history: historySnapshot,
+          sessionId: getSessionId(),
+          stream: true,
+          useDocs,
+        }),
+      });
+
+      if (!res.ok || !res.body) {
+        speaker?.cancel();
+        let msg = "LLM request failed";
+        try {
+          const data = await res.json();
+          msg = data.error ?? msg;
+        } catch {}
+        setError(msg);
+        setMessages((prev) => [...prev, { role: "assistant", content: "Error talking to AI. Please try again." }]);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let answer = "";
+      let started = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        answer += decoder.decode(value, { stream: true });
+        speaker?.push(answer);
+        const current = answer;
+        if (!started) {
+          started = true;
+          setStreaming(true);
+          setMessages((prev) => [...prev, { role: "assistant", content: current }]);
+        } else {
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content: current };
+            return next;
+          });
+        }
+      }
+      answer += decoder.decode();
+
+      if (!answer.trim()) {
+        speaker?.cancel();
+        setMessages((prev) => [...prev, { role: "assistant", content: "No answer from AI." }]);
+      } else {
+        const finalText = answer;
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", content: finalText };
+          return next;
+        });
+        speaker?.end(finalText);
+      }
+    } catch {
+      speaker?.cancel();
+      setError("Network error");
+      setMessages((prev) => [...prev, { role: "assistant", content: "Error talking to AI. Please try again." }]);
+    } finally {
+      setStreaming(false);
+    }
   }
 
   async function handleFileUpload(file: File) {
     // Agar pehle se koi chat/upload/image request chal rahi hai, to naya action shuru mat karo —
-    // warna dono responses jis order mein resolve hon usi (random) order mein screen pe aa jaate hain.
+    // warna responses random order mein screen pe aa jaate hain.
     if (loading) return;
 
+    const historySnapshot = messages;
     const formData = new FormData();
     formData.append("file", file);
     formData.append("sessionId", getSessionId());
@@ -48,7 +142,10 @@ export default function ChatPage() {
 
     try {
       const res = await fetch("/api/chat/upload-document", { method: "POST", body: formData });
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {}
 
       if (!res.ok) {
         setError(data.error ?? "Upload failed");
@@ -56,33 +153,15 @@ export default function ChatPage() {
         return;
       }
 
+      markUploadedDocs();
       setMessages((prev) => [...prev, { role: "assistant", content: `Document "${file.name}" uploaded and added to knowledge base ✅` }]);
 
-      // Upload ke turant baad khud hi document ko explain karo — user ko alag se
-      // "explain this pdf" type karke bhejne ki zaroorat nahi, seedha yahin reply aa jaayega.
-      try {
-        const chatRes = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: `Maine "${file.name}" naam ka document upload kiya hai. Iska content padh kar mujhe achhe se samjhao ki isme kya hai.`,
-            model,
-            history: messages,
-            sessionId: getSessionId(),
-          }),
-        });
-        const chatData = await chatRes.json();
-
-        if (!chatRes.ok) {
-          setMessages((prev) => [...prev, { role: "assistant", content: chatData.error || "Document explain nahi ho paaya, ek baar 'explain kro' likh kar bhej dena." }]);
-        } else {
-          const answer = chatData.answer || "Document padh liya, lekin explanation generate nahi ho paaya.";
-          setMessages((prev) => [...prev, { role: "assistant", content: answer }]);
-          speak(answer);
-        }
-      } catch {
-        setMessages((prev) => [...prev, { role: "assistant", content: "Document explain nahi ho paaya, ek baar 'explain kro' likh kar bhej dena." }]);
-      }
+      // Upload ke turant baad khud hi document ko explain karo (stream hota hua jawab)
+      await streamAssistantReply(
+        `Maine "${file.name}" naam ka document upload kiya hai. Iska content padh kar mujhe achhe se samjhao ki isme kya hai.`,
+        historySnapshot,
+        true
+      );
     } catch {
       setError("Network error");
       setMessages((prev) => [...prev, { role: "assistant", content: "Document upload failed. Please try again." }]);
@@ -94,25 +173,30 @@ export default function ChatPage() {
   async function handleImageSelected(file: File) {
     if (loading) return; // ek waqt mein ek hi request — ordering safe rakhne ke liye
 
+    // Chat ki language pehchaanne ke liye pichhla user text (photo/document wale message chhodkar)
+    const languageHint =
+      [...messages].reverse().find((m) => m.role === "user" && !m.content.startsWith("📷") && !m.content.startsWith("📄"))
+        ?.content ?? "";
+
     setError(null);
     setLoading(true);
+    stopSpeaking();
     setMessages((prev) => [...prev, { role: "user", content: `📷 Sent image: ${file.name}` }]);
 
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // Badi photo ko browser mein hi chhota (max 1600px) kar do — upload tez, analysis same
+      const base64 = await fileToDataUrlResized(file);
 
       const res = await fetch("/api/chat/analyze-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64, question: input.trim() }),
+        body: JSON.stringify({ image: base64, question: input.trim(), languageHint }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {}
 
       if (!res.ok) {
         setError(data.error ?? "Image analysis failed");
@@ -136,34 +220,15 @@ export default function ChatPage() {
     if (!input.trim() || loading) return; // ek waqt mein ek hi request
 
     const userInput = input.trim();
-    // Pichhli saari baat-cheet (history) ko snapshot kar lo naya message add karne se PEHLE —
-    // isse backend ko pata rahega ki "hn"/"aur batao" jaisa chhota follow-up kis context mein
-    // poocha gaya hai. Pehle ye bheja hi nahi jaata tha, isliye follow-ups kaam nahi karte the.
+    // Pichhli baat-cheet (history) naya message add karne se PEHLE snapshot karo,
+    // taaki "hn"/"aur batao" jaise follow-ups ka context backend ko mile.
     const historyForRequest = messages;
     setInput("");
     setLoading(true);
     setMessages((prev) => [...prev, { role: "user", content: userInput }]);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userInput, model, history: historyForRequest, sessionId: getSessionId() }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error ?? "LLM request failed");
-        setMessages((prev) => [...prev, { role: "assistant", content: "Error talking to AI. Please try again." }]);
-      } else {
-        const answer = data.answer || "No answer from AI.";
-        setMessages((prev) => [...prev, { role: "assistant", content: answer }]);
-        speak(answer);
-      }
-    } catch {
-      setError("Network error");
-      setMessages((prev) => [...prev, { role: "assistant", content: "Error talking to AI. Please try again." }]);
+      await streamAssistantReply(userInput, historyForRequest);
     } finally {
       setLoading(false);
     }
@@ -236,7 +301,7 @@ export default function ChatPage() {
               </div>
             ))}
 
-            {loading && (
+            {loading && !streaming && (
               <div className="message-row from-ai">
                 <div className="message-bubble">
                   <div className="typing-dots"><span /><span /><span /></div>

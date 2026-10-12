@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Mic, MicOff } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 
 export function VoiceInput({
   onTranscript,
@@ -105,22 +105,36 @@ export function VoiceInput({
     }
   };
 
+  // NOTE: pehle listening state mein "MicOff" (crossed-out mic) icon dikhata tha — jo dekhne
+  // mein "mute ho gaya" jaisa lagta tha, jabki asal mein wo "recording chal rahi hai" bata raha
+  // tha. Ab ek chhota "stop square" icon (jaise voice-recorder apps mein hota hai) dikhate hain,
+  // jo clearly "recording ho rahi hai, click to stop" ka matlab deta hai — mute jaisa nahi lagta.
   return (
-    <button
-      onClick={toggleListening}
-      disabled={disabled}
-      className={`p-2 rounded-full transition ${listening ? "bg-red-500 animate-pulse" : "bg-white/10 hover:bg-white/20"}`}
-      type="button"
-      title={disabled ? "Pichhli request poori hone ka wait karo" : listening ? "Sun raha hoon... click to stop" : "Voice input"}
-      style={{
-        width: 36, height: 36, borderRadius: "50%", border: "none",
-        background: listening ? "#ef4444" : "rgba(255,255,255,0.1)",
-        color: "white", display: "flex", alignItems: "center", justifyContent: "center",
-        cursor: disabled ? "not-allowed" : "pointer", flexShrink: 0,
-        opacity: disabled ? 0.4 : 1,
-      }}
-    >
-      {listening ? <MicOff size={18} /> : <Mic size={18} />}
-    </button>
+    <div style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={toggleListening}
+        disabled={disabled}
+        className={`p-2 rounded-full transition ${listening ? "bg-red-500 animate-pulse" : "bg-white/10 hover:bg-white/20"}`}
+        type="button"
+        title={disabled ? "Pichhli request poori hone ka wait karo" : listening ? "Recording ho rahi hai... rokne ke liye click karo" : "Voice input shuru karo"}
+        style={{
+          width: 36, height: 36, borderRadius: "50%", border: "none",
+          background: listening ? "#ef4444" : "rgba(255,255,255,0.1)",
+          color: "white", display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: disabled ? "not-allowed" : "pointer", flexShrink: 0,
+          opacity: disabled ? 0.4 : 1,
+        }}
+      >
+        {listening ? <Square size={16} fill="white" /> : <Mic size={18} />}
+      </button>
+      {listening && (
+        <span
+          style={{
+            position: "absolute", top: -2, right: -2, width: 10, height: 10,
+            borderRadius: "50%", background: "#ef4444", border: "2px solid #1a1a2e",
+          }}
+        />
+      )}
+    </div>
   );
 }

@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
   // "Setting up fake worker failed: Cannot find module ... pdf.worker.mjs" error aata tha.
   // serverExternalPackages inhe bundling se opt-out kar deta hai, taaki Node.js
   // ka normal require() chale aur asli file path sahi resolve ho.
-  serverExternalPackages: ["pdfjs-dist", "pdf-parse", "@napi-rs/canvas"],
+  serverExternalPackages: ["pdfjs-dist", "pdf-parse", "@napi-rs/canvas", "msedge-tts"],
 };
 
 export default nextConfig;

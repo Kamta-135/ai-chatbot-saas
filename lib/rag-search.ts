@@ -6,73 +6,72 @@ const supabaseKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// "explain this pdf" / "iska summary do" jaise generic/vague queries ka embedding
-// uploaded document ke actual content se semantically match nahi karta (cosine similarity
-// match_threshold 0.3 se neeche reh jaati hai), isliye pehle match_documents khaali result
-// deta tha aur LLM ko lagta tha ki koi document hai hi nahi — isi wajah se wo hallucinate
-// karke bol deta tha "aapne upload karna bhool gaye", jabki upload successfully ho chuka hota tha.
-//
-// Fix: semantic search ke saath-saath hamesha sabse recent upload(s) bhi zabardasti context
-// mein shaamil karo — kyunki jab user "is document/pdf ka" jaisa reference karta hai, uska
-// matlab (almost) hamesha sabse last uploaded file hi hota hai, chaahe semantic score kam ho.
-const RECENT_DOCS_COUNT = 2;
+// "explain this pdf" / "iska summary do" jaise vague sawaal ka embedding document se match nahi
+// karta, isliye semantic search ke saath sabse recent upload ke SHURUAATI chunks bhi hamesha
+// shaamil karte hain (user ka matlab almost hamesha last uploaded file hota hai).
+const RECENT_CHUNKS = 3;
 
-// sessionId diya gaya ho to sirf usी visitor ke documents return karte hain — taaki ek user
-// ka upload dusre user ke jawabon mein na aaye. sessionId na diya gaya ho (backward-compat)
-// to purana (sabke liye shared) behaviour hi chalta hai.
+// sessionId diya ho to sirf usi visitor ke documents; warna sab shared.
 export async function getRelevantDocuments(userQuery: string, limit = 5, sessionId?: string) {
     const results = new Map<string | number, any>();
 
-    // 1) Semantic similarity search (jo topic se related ho). Ye Supabase RPC function hai jo
-    // seedhe SQL mein likha hua hai — usko chhede bina, result aane ke BAAD JS mein hi
-    // session_id se filter kar dete hain (safe, koi DB migration/RPC change nahi chahiye).
-    try {
-        const queryEmbedding = await embedText(userQuery);
-
-        const { data: semanticDocs, error } = await supabase.rpc("match_documents", {
-            query_embedding: queryEmbedding,
-            match_threshold: 0.3,
-            match_count: limit * 3, // filter karne ke baad bhi enough results bachein isliye zyada mangwao
-        });
-
-        if (error) {
-            console.error("match_documents RPC error:", error);
-        } else {
-            for (const doc of semanticDocs || []) {
+    // 1) Semantic similarity search (RPC match_documents), baad mein JS mein session_id se filter
+    const semantic = async () => {
+        try {
+            const queryEmbedding = await embedText(userQuery);
+            const { data, error } = await supabase.rpc("match_documents", {
+                query_embedding: queryEmbedding,
+                match_threshold: 0.3,
+                match_count: limit * 3,
+            });
+            if (error) {
+                console.error("match_documents RPC error:", error);
+                return;
+            }
+            for (const doc of data || []) {
                 if (!sessionId || doc.metadata?.session_id === sessionId) {
                     results.set(doc.id, doc);
                 }
             }
+        } catch (error) {
+            console.error("getRelevantDocuments (semantic) error:", error);
         }
-    } catch (error) {
-        console.error("getRelevantDocuments (semantic) error:", error);
-    }
+    };
 
-    // 2) Recent uploads hamesha shaamil karo (vague "this pdf" type references ke liye) —
-    // yahan seedhe query mein hi (usी visitor ke) session_id se filter kar dete hain.
-    try {
-        let recentQuery = supabase
-            .from("documents")
-            .select("id, content, metadata")
-            .order("created_at", { ascending: false })
-            .limit(RECENT_DOCS_COUNT);
+    // 2) Sabse recent file ke pehle RECENT_CHUNKS chunks (chunkIndex ke order mein)
+    const recent = async () => {
+        try {
+            let q = supabase
+                .from("documents")
+                .select("id, content, metadata")
+                .order("created_at", { ascending: false })
+                .limit(60);
+            if (sessionId) q = q.contains("metadata", { session_id: sessionId });
 
-        if (sessionId) {
-            recentQuery = recentQuery.contains("metadata", { session_id: sessionId });
-        }
+            const { data, error } = await q;
+            if (error) {
+                console.error("recent documents fetch error:", error);
+                return;
+            }
+            const rows = (data || []) as any[];
+            if (!rows.length) return;
 
-        const { data: recentDocs, error: recentError } = await recentQuery;
+            const latestFile = rows[0].metadata?.fileName;
+            const sameFile = rows
+                .filter((r) => r.metadata?.fileName === latestFile)
+                .sort((a, b) => (a.metadata?.chunkIndex ?? 0) - (b.metadata?.chunkIndex ?? 0))
+                .slice(0, RECENT_CHUNKS);
 
-        if (recentError) {
-            console.error("recent documents fetch error:", recentError);
-        } else {
-            for (const doc of recentDocs || []) {
+            for (const doc of sameFile) {
                 if (!results.has(doc.id)) results.set(doc.id, doc);
             }
+        } catch (error) {
+            console.error("getRelevantDocuments (recent) error:", error);
         }
-    } catch (error) {
-        console.error("getRelevantDocuments (recent) error:", error);
-    }
+    };
 
-    return Array.from(results.values()).slice(0, limit + RECENT_DOCS_COUNT);
+    // Dono ek saath (pehle ek ke baad ek chalte the)
+    await Promise.all([semantic(), recent()]);
+
+    return Array.from(results.values()).slice(0, limit + RECENT_CHUNKS);
 }
