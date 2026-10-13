@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import { isRateLimited, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -97,7 +96,38 @@ async function toDevanagari(text: string): Promise<string | null> {
     }
 }
 
-async function synthesize(text: string, voice: string): Promise<Buffer> {
+// ---- Option 1 (official, zyada bharosemand): Azure Speech. AZURE_SPEECH_KEY + AZURE_SPEECH_REGION set ho to pehle yahi ----
+const AZURE_KEY = process.env.AZURE_SPEECH_KEY;
+const AZURE_REGION = process.env.AZURE_SPEECH_REGION;
+const AZURE_BASE_URL = process.env.AZURE_TTS_BASE_URL || (AZURE_REGION ? `https://${AZURE_REGION}.tts.speech.microsoft.com` : "");
+
+function xmlEscape(s: string) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+async function synthesizeAzure(text: string, voice: string): Promise<Buffer> {
+    const lang = voice.split("-").slice(0, 2).join("-");
+    const ssml = `<speak version='1.0' xml:lang='${lang}'><voice name='${voice}'>${xmlEscape(text)}</voice></speak>`;
+    const res = await fetch(`${AZURE_BASE_URL}/cognitiveservices/v1`, {
+        method: "POST",
+        headers: {
+            "Ocp-Apim-Subscription-Key": AZURE_KEY || "",
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+            "User-Agent": "nexora-chatbot",
+        },
+        body: ssml,
+        signal: AbortSignal.timeout(25_000),
+    });
+    if (!res.ok) throw new Error(`Azure Speech HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) throw new Error("Azure Speech: khaali audio aaya");
+    return buf;
+}
+
+// ---- Option 2 (free, unofficial): msedge-tts. Sirf zaroorat par load hota hai ----
+async function synthesizeEdge(text: string, voice: string): Promise<Buffer> {
+    const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
     const tts = new MsEdgeTTS();
     try {
         await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
@@ -123,6 +153,24 @@ async function synthesize(text: string, voice: string): Promise<Buffer> {
         try {
             tts.close();
         } catch {}
+    }
+}
+
+async function synthesize(text: string, voice: string): Promise<Buffer> {
+    const errors: string[] = [];
+    if (AZURE_KEY && AZURE_BASE_URL) {
+        try {
+            return await synthesizeAzure(text, voice);
+        } catch (e) {
+            errors.push(String((e as any)?.message || e));
+            console.error("[tts] Azure fail, msedge-tts try kar raha hoon:", e);
+        }
+    }
+    try {
+        return await synthesizeEdge(text, voice);
+    } catch (e) {
+        errors.push("msedge-tts: " + String((e as any)?.message || e));
+        throw new Error(errors.join(" | "));
     }
 }
 
@@ -162,6 +210,10 @@ export async function POST(req: NextRequest) {
         });
     } catch (e) {
         console.error("[tts] error:", e);
-        return NextResponse.json({ error: "TTS failed" }, { status: 500 });
+        // detail se pata chalta hai ki Vercel par awaaz kyun nahi bani (isme koi secret nahi hota)
+        return NextResponse.json(
+            { error: "TTS failed", detail: String((e as any)?.message || e).slice(0, 300) },
+            { status: 500 }
+        );
     }
 }

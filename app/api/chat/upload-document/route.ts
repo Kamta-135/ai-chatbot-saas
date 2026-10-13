@@ -4,7 +4,6 @@ import { embedText } from "@/lib/embeddings";
 import { isRateLimited, getClientIp } from "@/lib/rate-limit";
 import { chunkText } from "@/lib/chunk-text";
 import { withTimeout, rejectAfter } from "@/lib/with-timeout";
-import { PDFParse } from "pdf-parse";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -19,7 +18,9 @@ const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
 
 // pdf-parse v2: PDFParse class (purana pdfParse(buffer) function style ab kaam nahi karta).
 // @napi-rs/canvas package.json mein hona chahiye (DOMMatrix error se bachne ke liye).
+// pdf-parse sirf PDF aane par load hota hai (top-level import se, native part na chalne par .txt upload bhi toot jaata tha)
 async function extractPdfText(buffer: Buffer): Promise<string> {
+    const { PDFParse } = await import("pdf-parse");
     const parser = new PDFParse({ data: buffer });
     try {
         const result = await parser.getText();

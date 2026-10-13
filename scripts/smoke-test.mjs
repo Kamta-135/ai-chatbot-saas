@@ -22,6 +22,23 @@ async function step(name, fn, tip) {
 
 const post = (path, body, extra = {}) => fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), ...extra });
 const sid = "smoke-" + Date.now();
+const TEST_PDF_B64 = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMDMgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiA3MiA3MDAgVGQgKEJob3BhbCBpcyB0aGUgY2FwaXRhbCBvZiBNYWRoeWEgUHJhZGVzaC4gSXQgaXMgY2FsbGVkIHRoZSBDaXR5IG9mIExha2VzLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzOTUgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0NjUKJSVFT0YK";
+
+// Jawab khaali ya JSON na ho tab bhi crash nahi hota; seedha dikhata hai ki server ne kya bheja
+async function readBody(r) {
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  const brief = json ? (json.error || json.detail ? `${json.error || ""} ${json.detail || ""}`.trim() : JSON.stringify(json).slice(0, 160)) : (text ? text.replace(/\s+/g, " ").slice(0, 160) : "(khaali jawab)");
+  return { json, text, brief };
+}
+
+// JSON jawab chahiye; khaali / HTML jawab par saaf message ("Unexpected end of JSON" nahi)
+async function J(r) {
+  const b = await readBody(r);
+  if (!b.json) throw new Error(`status ${r.status}: ${b.brief}`);
+  return b.json;
+}
 
 console.log(`\nSmoke test: ${BASE}\n`);
 
@@ -33,17 +50,17 @@ await step("Server / page khul raha hai", async () => {
 await step("Health check (keys + services)", async () => {
   const r = await fetch(BASE + "/api/health");
   if (r.status === 404) return { warn: "health band hai (live site par normal). Local par npm run dev se chalta hai" };
-  const j = await r.json();
+  const j = await J(r);
   const bad = [];
   if (j.envProblems && j.envProblems !== "sab theek hai") for (const p of j.envProblems) if (p.level === "error") bad.push(`${p.name}: ${p.message}`);
-  for (const k of ["chatModel", "liveSearch", "voice", "supabase", "embeddings"]) if (j[k] && j[k].ok === false) bad.push(`${k}: ${j[k].error}`);
+  for (const k of ["chatModel", "liveSearch", "voice", "pdf", "supabase", "embeddings"]) if (j[k] && j[k].ok === false) bad.push(`${k}: ${j[k].error}`);
   if (bad.length) throw new Error("\n      - " + bad.join("\n      - "));
   return { info: "keys, search, voice, supabase, embeddings sab OK" };
 }, "node scripts/check-env.mjs chalao, wo bata dega kaunsi key/service galat hai");
 
 await step("Chat (normal jawab)", async () => {
   const r = await post("/api/chat", { message: "Say hello in one short sentence.", sessionId: sid });
-  const j = await r.json();
+  const j = await J(r);
   if (!r.ok) throw new Error(`status ${r.status}: ${j.error}`);
   if (!j.answer || j.answer === "No answer from model.") throw new Error("khaali jawab aaya");
   return { info: j.answer.slice(0, 60).replace(/\n/g, " ") };
@@ -62,7 +79,7 @@ await step("Chat (streaming, shabd-shabd)", async () => {
 
 await step("Live info (mp ke cm kon hai)", async () => {
   const r = await post("/api/chat", { message: "mp ke cm kon hai", sessionId: sid });
-  const j = await r.json();
+  const j = await J(r);
   if (!r.ok) throw new Error(`status ${r.status}: ${j.error}`);
   const a = j.answer || "";
   if (/Mohan Yadav|मोहन यादव|मोहन/.test(a)) return { info: "Mohan Yadav mila" };
@@ -72,7 +89,7 @@ await step("Live info (mp ke cm kon hai)", async () => {
 
 await step("Voice (Indian male awaaz)", async () => {
   const r = await post("/api/tts", { text: "नमस्ते, मैं आपका एआई असिस्टेंट हूँ।" });
-  if (!r.ok) throw new Error(`status ${r.status}`);
+  if (!r.ok) throw new Error(`status ${r.status}: ${(await readBody(r)).brief}`);
   const buf = await r.arrayBuffer();
   if (buf.byteLength < 2000 || !(r.headers.get("content-type") || "").includes("audio")) throw new Error("audio nahi aaya");
   return { info: `${buf.byteLength} bytes audio` };
@@ -82,7 +99,7 @@ await step("Image analysis", async () => {
   // 1x1 laal pixel PNG
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const r = await post("/api/chat/analyze-image", { image: png, question: "What is in this image? Answer in one short line." });
-  const j = await r.json();
+  const j = await J(r);
   if (!r.ok) throw new Error(`status ${r.status}: ${j.error}`);
   if (!j.answer) throw new Error("khaali jawab");
   return { info: j.answer.slice(0, 60).replace(/\n/g, " ") };
@@ -95,14 +112,30 @@ await step("Document upload + RAG", async () => {
   fd.append("file", new Blob([text], { type: "text/plain" }), "smoke-test.txt");
   fd.append("sessionId", sid);
   const up = await fetch(BASE + "/api/chat/upload-document", { method: "POST", body: fd });
-  const uj = await up.json();
-  if (!up.ok) throw new Error(`upload status ${up.status}: ${uj.error}`);
+  const ub = await readBody(up);
+  const uj = ub.json || {};
+  if (!up.ok || !ub.json) throw new Error(`upload status ${up.status}: ${ub.brief}`);
   const r = await post("/api/chat", { message: "Is document ka secret code kya hai?", sessionId: sid });
-  const j = await r.json();
+  const j = await J(r);
   if (!r.ok) throw new Error(`chat status ${r.status}: ${j.error}`);
   if (!(j.answer || "").includes(marker)) return { warn: `upload ho gaya (${uj.chunks} chunk) par jawab mein code nahi aaya (embeddings ya match_documents check karo)` };
   return { info: `upload + search sahi (${uj.chunks} chunk, code mila)` };
 }, "Supabase project ACTIVE hai? (supabase.com/dashboard > Resume project). node scripts/check-env.mjs bhi chalao");
+
+await step("PDF upload + search", async () => {
+  const pdfSid = sid + "-pdf";
+  const fd = new FormData();
+  fd.append("file", new Blob([Buffer.from(TEST_PDF_B64, "base64")], { type: "application/pdf" }), "smoke-test.pdf");
+  fd.append("sessionId", pdfSid);
+  const up = await fetch(BASE + "/api/chat/upload-document", { method: "POST", body: fd });
+  const ub = await readBody(up);
+  if (!up.ok || !ub.json) throw new Error(`upload status ${up.status}: ${ub.brief}`);
+  const r = await post("/api/chat", { message: "Is PDF mein Bhopal ke baare mein kya likha hai?", sessionId: pdfSid });
+  const j = await J(r);
+  if (!r.ok) throw new Error(`chat status ${r.status}: ${j.error}`);
+  if (!/capital|Madhya Pradesh|मध्य प्रदेश|भोपाल|Lakes|झील/i.test(j.answer || "")) return { warn: "PDF upload ho gaya par jawab mein PDF ki baat nahi dikhi: " + (j.answer || "").slice(0, 80).replace(/\n/g, " ") };
+  return { info: `PDF padha gaya (${ub.json.chunks} chunk) aur jawab mein use hua` };
+}, "PDF padhne mein dikkat: Vercel > Logs mein upload-document ki laal line dekho (pdf-parse / canvas). /api/health ka pdf wala hissa bhi dekho");
 
 console.log(`\nResult: ${G(pass + " pass")}, ${warn ? Y(warn + " warning") : "0 warning"}, ${fail ? R(fail + " fail") : "0 fail"}`);
 process.exit(fail ? 1 : 0);

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import { liveSearch } from "@/lib/live-search";
 import { embedText } from "@/lib/embeddings";
 import { checkEnv } from "@/lib/env-check";
 import { DEFAULT_MODEL } from "@/lib/models";
+import { TEST_PDF_B64 } from "@/lib/test-pdf";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,7 +29,22 @@ async function timed<T>(fn: () => Promise<T>) {
     }
 }
 
+async function pdfCheck(): Promise<string> {
+    const { PDFParse } = await import("pdf-parse");
+    const parser = new PDFParse({ data: Buffer.from(TEST_PDF_B64, "base64") });
+    try {
+        const r = await parser.getText();
+        if (!/Madhya Pradesh/.test(r.text)) throw new Error("PDF se text nahi nikla");
+        return "PDF padhna OK";
+    } finally {
+        try {
+            await parser.destroy();
+        } catch {}
+    }
+}
+
 async function ttsBytes(): Promise<number> {
+    const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
     const tts = new MsEdgeTTS();
     try {
         await tts.setMetadata("hi-IN-MadhurNeural", OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
@@ -94,22 +109,25 @@ export async function GET() {
     const or = process.env.OPENROUTER_API_KEY || "";
     const gem = process.env.GEMINI_API_KEY || "";
 
-    const [live, tts, supa, emb, chat] = await Promise.all([
+    const [live, tts, supa, emb, chat, pdf] = await Promise.all([
         timed(() => withTimeout(liveSearch("mp ke cm kon hai"), 20000, "liveSearch")),
         timed(ttsBytes),
         timed(() => withTimeout(supabaseCheck(), 15000, "supabase")),
         timed(() => withTimeout(embeddingCheck(), 15000, "embedding")),
         timed(() => withTimeout(chatModelCheck(), 22000, "chat model")),
+        timed(() => withTimeout(pdfCheck(), 15000, "pdf")),
     ]);
 
     return NextResponse.json({
         env: {
             TAVILY_API_KEY: tav ? `set (length ${tav.length}, starts with ${tav.slice(0, 5)})` : "MISSING",
             OPENROUTER_API_KEY: or ? `set (length ${or.length}, starts with ${or.slice(0, 9)})` : "MISSING",
+            AZURE_SPEECH_KEY: process.env.AZURE_SPEECH_KEY ? "set (voice ke liye official Azure pehle try hoga)" : "not set (free msedge-tts use hoga)",
             GEMINI_API_KEY: gem ? `set (length ${gem.length}, starts with ${gem.slice(0, 4)})` : "MISSING",
         },
         envProblems: checkEnv().length ? checkEnv() : "sab theek hai",
         chatModel: chat.ok ? { ok: true, ms: chat.ms, info: chat.value } : chat,
+        pdf: pdf.ok ? { ok: true, ms: pdf.ms, info: pdf.value } : pdf,
         liveSearch: live.ok
             ? { ok: true, ms: live.ms, chars: live.value.length, preview: live.value.slice(0, 300) || "(khaali)" }
             : live,
