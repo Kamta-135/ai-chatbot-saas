@@ -32,7 +32,9 @@ Key change karne ke baad server ko `Ctrl+C` karke dobara chalao (env sirf start 
 | "mp ke cm" jaise sawaal ka purana jawab | TAVILY key galat/missing | `node scripts/check-env.mjs`, sahi `tvly-` key |
 | Terminal: `ENOTFOUND ...supabase.co` | Supabase project paused | supabase.com/dashboard > Resume project |
 | PDF: "Database (Supabase) se connect nahi ho pa raha" | wahi, ya internet | Resume project / internet check |
+| PDF: `DOMMatrix is not defined` (Vercel) | purana pdf-parse ka native canvas Vercel par nahi milta | Ab `unpdf` use hota hai (`npm install unpdf`), koi native part nahi |
 | PDF: `pdf.worker.mjs` error (production) | next.config mein externals nahi | `node scripts/patch-next-config.mjs` |
+| Voice: `Edge TTS WebSocket error: 403` (Vercel par) | Microsoft ka free server Vercel ko block karta hai | Azure Speech (free F0): Vercel env mein `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`. Tab tak browser ki awaaz (Edge mein Madhur) bolti hai |
 | Awaaz Hindi mein ajeeb / alag desh ki | Server voice chali nahi, browser voice bol raha | terminal mein `[tts] error` dekho, `msedge-tts` install karo |
 | Voice bilkul nahi | Browser autoplay block / mute icon | Page par ek baar click karo, speaker icon check karo |
 | Camera nahi khulta | Permission blocked ya HTTP | Address bar ke lock icon se Camera Allow (localhost / https par hi chalta hai) |

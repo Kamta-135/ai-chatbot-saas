@@ -226,6 +226,8 @@ function playBlob(blob: Blob, id: number): Promise<void> {
 // ---------------------------------------------------------------------------------------------
 // Live speaker: stream hote jawab ke saath saath bolta hai
 //   const s = createLiveSpeaker();  s.push(textSoFar) ... s.end(finalText)   (ya s.cancel())
+// Server awaaz (Microsoft neural) chalti hai to wahi; na chale (jaise Vercel par 403) to turant browser ki
+// awaaz se tukda-tukda bolta hai, aur 5 minute tak seedha browser voice (har jawab par server ka intezaar nahi).
 // ---------------------------------------------------------------------------------------------
 export interface LiveSpeaker {
   push(fullText: string): void;
@@ -234,6 +236,8 @@ export interface LiveSpeaker {
 }
 
 const MAX_SPOKEN_CHARS = 4000; // bahut lamba jawab poora nahi bolta (~4-5 minute ki audio)
+const SERVER_DOWN_MS = 5 * 60 * 1000;
+let serverVoiceDownUntil = 0;
 
 export function createLiveSpeaker(): LiveSpeaker {
   if (typeof window === "undefined") return { push() {}, end() {}, cancel() {} };
@@ -249,12 +253,13 @@ export function createLiveSpeaker(): LiveSpeaker {
   let spoken = 0;
   let finished = false;
   let started = false;
-  let latest = "";
   let playIndex = 0;
   let wake: (() => void) | null = null;
+  let browserMode = Date.now() < serverVoiceDownUntil; // server awaaz haal hi mein fail hui thi
+  let browserSpoken = 0; // chunks[0..browserSpoken) browser ko de diye gaye
 
   const request = (i: number) => {
-    if (i >= chunks.length || pending[i]) return;
+    if (browserMode || i >= chunks.length || pending[i]) return;
     const p = fetchChunkAudio(chunks[i], ctrl.signal);
     p.catch(() => {}); // unhandled-rejection se bachne ke liye; asli error await par pakdi jaati hai
     pending[i] = p;
@@ -263,6 +268,18 @@ export function createLiveSpeaker(): LiveSpeaker {
     const w = wake;
     wake = null;
     if (w) w();
+  };
+  const speakRestInBrowser = () => {
+    for (; browserSpoken < chunks.length; browserSpoken++) browserSpeak(chunks[browserSpoken], id);
+  };
+  const switchToBrowser = (why: unknown) => {
+    if (id !== speakId) return;
+    console.warn("[speak] server awaaz nahi chali, browser voice par ja rahe hain:", why);
+    serverVoiceDownUntil = Date.now() + SERVER_DOWN_MS;
+    browserMode = true;
+    browserSpoken = Math.min(playIndex, chunks.length); // jo server se bol chuke hain wo dobara nahi
+    releaseAudio();
+    speakRestInBrowser();
   };
 
   async function run() {
@@ -281,8 +298,7 @@ export function createLiveSpeaker(): LiveSpeaker {
           blob = await pending[playIndex]!;
         } catch (e) {
           if (id !== speakId || (e as any)?.name === "AbortError") return;
-          if (playIndex === 0) throw e; // pehla hi tukda fail: browser voice try karo
-          console.warn("[speak] aage ka tukda nahi aaya, yahin ruk gaya:", e);
+          switchToBrowser(e);
           return;
         }
         if (id !== speakId) return;
@@ -290,22 +306,24 @@ export function createLiveSpeaker(): LiveSpeaker {
         if (id !== speakId) return;
       }
     } catch (e) {
+      // audio chalane mein dikkat (jaise browser ne autoplay roka)
       if (id !== speakId) return;
-      console.warn("[speak] server voice fail:", e);
-      releaseAudio();
-      browserSpeak(latest, id);
+      switchToBrowser(e);
     }
   }
 
   function feed(text: string, final: boolean) {
     if (id !== speakId) return;
-    latest = text;
     const res = takeSpeechChunks(stripCodeForSpeech(text), consumed, final, chunks.length);
     consumed = res.consumed;
     for (const c of res.chunks) {
       if (spoken >= MAX_SPOKEN_CHARS) break;
       spoken += c.length;
       chunks.push(c);
+    }
+    if (browserMode) {
+      speakRestInBrowser();
+      return;
     }
     for (let k = playIndex; k <= playIndex + 2; k++) request(k);
     if (chunks.length && !started) {

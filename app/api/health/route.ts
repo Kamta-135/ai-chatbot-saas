@@ -5,6 +5,7 @@ import { embedText } from "@/lib/embeddings";
 import { checkEnv } from "@/lib/env-check";
 import { DEFAULT_MODEL } from "@/lib/models";
 import { TEST_PDF_B64 } from "@/lib/test-pdf";
+import { extractPdfText } from "@/lib/pdf-text";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -30,17 +31,9 @@ async function timed<T>(fn: () => Promise<T>) {
 }
 
 async function pdfCheck(): Promise<string> {
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: Buffer.from(TEST_PDF_B64, "base64") });
-    try {
-        const r = await parser.getText();
-        if (!/Madhya Pradesh/.test(r.text)) throw new Error("PDF se text nahi nikla");
-        return "PDF padhna OK";
-    } finally {
-        try {
-            await parser.destroy();
-        } catch {}
-    }
+    const text = await extractPdfText(Buffer.from(TEST_PDF_B64, "base64"));
+    if (!/Madhya Pradesh/.test(text)) throw new Error("PDF se text nahi nikla");
+    return "PDF padhna OK";
 }
 
 async function ttsBytes(): Promise<number> {

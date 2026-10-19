@@ -4,6 +4,7 @@ import { embedText } from "@/lib/embeddings";
 import { isRateLimited, getClientIp } from "@/lib/rate-limit";
 import { chunkText } from "@/lib/chunk-text";
 import { withTimeout, rejectAfter } from "@/lib/with-timeout";
+import { extractPdfText } from "@/lib/pdf-text";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,23 +16,6 @@ const supabase = createClient(
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_EXTENSIONS = [".txt", ".pdf"];
-
-// pdf-parse v2: PDFParse class (purana pdfParse(buffer) function style ab kaam nahi karta).
-// @napi-rs/canvas package.json mein hona chahiye (DOMMatrix error se bachne ke liye).
-// pdf-parse sirf PDF aane par load hota hai (top-level import se, native part na chalne par .txt upload bhi toot jaata tha)
-async function extractPdfText(buffer: Buffer): Promise<string> {
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
-    try {
-        const result = await parser.getText();
-        // pdf-parse har page ke baad "-- 1 of 3 --" jaisi line jodta hai, wo context mein kachra hai
-        return result.text.replace(/^\s*--\s*\d+\s+of\s+\d+\s*--\s*$/gm, "");
-    } finally {
-        try {
-            await parser.destroy();
-        } catch {}
-    }
-}
 
 // Chhote chunks ke embeddings 4-4 ek saath banate hain (tez, aur API rate limit bhi safe)
 async function embedAll(chunks: string[], batchSize = 4): Promise<any[]> {
